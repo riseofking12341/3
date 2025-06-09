@@ -3,34 +3,75 @@ from GoogleNews import GoogleNews
 import yfinance as yf
 from openai import OpenAI
 
-# Initiera OpenAI-klient
 client = OpenAI()
 
-st.set_page_config(page_title="Avancerad Nyhets- och Aktieanalys", layout="wide")
+st.set_page_config(page_title="Avancerad Aktie & Nyhetsanalys", layout="wide")
 
-st.title("📈 Avancerad Nyhets- och Aktieanalys med AI")
+# --- DESIGN ---
 st.markdown(
-    "Denna app hämtar senaste nyheter om ett företag, kopplar ihop med aktiekursdata "
-    "och ger AI-baserad kort- och långsiktig investeringsanalys."
+    """
+    <style>
+    .stApp {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #f9f9f9;
+    }
+    .header {
+        color: #2c3e50;
+        font-weight: 700;
+    }
+    .subheader {
+        color: #34495e;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+    .fin-metric {
+        background-color: #ffffff;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .news-item {
+        background-color: #ffffff;
+        border-left: 5px solid #2980b9;
+        padding: 15px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    .analysis-box {
+        background-color: #ecf0f1;
+        padding: 15px;
+        border-radius: 8px;
+        margin-top: 20px;
+        font-style: italic;
+        color: #2c3e50;
+    }
+    </style>
+    """, unsafe_allow_html=True
 )
-st.markdown("---")
 
-# Sidebar för input
+st.markdown('<h1 class="header">📊 Avancerad Aktie- och Nyhetsanalys</h1>', unsafe_allow_html=True)
+st.markdown(
+    "<p>Appen hämtar senaste nyheter och bolagsdata, "
+    "ger en djup AI-analys av påverkan på aktien – både kort och lång sikt.</p>", unsafe_allow_html=True)
+st.markdown("<hr>")
+
+# SIDEBAR
 with st.sidebar:
-    st.header("Ange Företagsinfo")
-    company_name = st.text_input("Företagsnamn (ex: Tesla)", value="Tesla")
-    stock_ticker = st.text_input("Aktieticker (ex: TSLA)", value="TSLA")
-    max_news = st.slider("Max antal nyheter att visa", 1, 10, 5)
+    st.header("Företagsinformation")
+    company_name = st.text_input("Företagsnamn", value="Tesla")
+    stock_ticker = st.text_input("Aktieticker", value="TSLA")
+    max_news = st.slider("Max antal nyheter", 1, 10, 5)
     st.markdown("---")
-    st.caption("Appen använder OpenAI GPT-3.5 Turbo för analys.")
+    st.caption("AI driven av OpenAI GPT-3.5 Turbo")
+
+# HJÄLPFUNKTIONER
 
 def format_large_number(num):
-    """Formatera stora tal till miljarder eller miljoner med svensk notation"""
     try:
         num = float(num)
     except (ValueError, TypeError):
         return "N/A"
-
     if num >= 1_000_000_000:
         return f"{num / 1_000_000_000:.1f} Mdkr"
     elif num >= 1_000_000:
@@ -40,7 +81,6 @@ def format_large_number(num):
     else:
         return str(num)
 
-# Förklaringar för finansiella nyckeltal
 explanations = {
     "Marknadsvärde": "Totalt värde på bolaget på börsen (aktiekurs x antal aktier).",
     "P/E-tal": "Pris per vinstkrona; hög P/E = höga tillväxtförväntningar.",
@@ -66,7 +106,7 @@ def get_stock_data(ticker):
     data = {
         "Nuvarande pris": info.get('currentPrice', 'N/A'),
         "Marknadsvärde": format_large_number(info.get('marketCap')),
-        "P/E-tal": info.get('trailingPE', 'N/A'),
+        "P/E-tal": info.get('trailingPE', None),
         "PEG-tal": info.get('pegRatio', 'N/A'),
         "Utdelning (yield)": f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else "N/A",
         "Beta (volatilitet)": info.get('beta', 'N/A'),
@@ -78,11 +118,23 @@ def get_stock_data(ticker):
     }
     return data
 
+def pe_indicator(pe_value):
+    """Returnerar procentvärde (max 100), färg och kommentar baserat på PE."""
+    if pe_value is None:
+        return 0, "gray", "P/E-tal saknas"
+    if pe_value <= 10:
+        return min(100, pe_value * 10), "green", "Lågt P/E – kan indikera undervärderad aktie"
+    elif pe_value <= 25:
+        return min(100, (pe_value-10)*6.67), "orange", "Medelhögt P/E – normalt för tillväxtbolag"
+    else:
+        return 100, "red", "Högt P/E – höga förväntningar, risk för övervärdering"
+
 def analyze_news_with_stock(news_text, stock_ticker):
     system_prompt = (
         "Du är en erfaren finansiell analytiker som analyserar nyheter och bolagsdata. "
         f"Analysera nedanstående nyhetstext och bolagsdata för aktien {stock_ticker}. "
-        "Ge en tydlig bedömning av hur detta påverkar aktiens kortsiktiga och långsiktiga utveckling."
+        "Fokusera på sannolik påverkan på aktiekursen – kommer nyheten sannolikt att göra aktien stiga, falla eller vara neutral, och varför? "
+        "Ge en tydlig bedömning för både kort och lång sikt."
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -126,36 +178,19 @@ if company_name and stock_ticker:
     news_items = fetch_news(company_name)
     stock_data = get_stock_data(stock_ticker)
 
+    # LAYOUT
     col1, col2 = st.columns([2, 3])
 
     with col1:
-        st.header(f"📊 Aktiedata för {stock_ticker}")
+        st.markdown('<h2 class="subheader">📊 Aktieinfo & Nyckeltal</h2>', unsafe_allow_html=True)
         for key, value in stock_data.items():
-            with st.expander(f"{key} - Förklaring"):
+            with st.expander(f"{key} – Förklaring"):
                 st.markdown(f"**{key}:** {value}")
                 st.caption(explanations.get(key, "Ingen förklaring tillgänglig."))
 
-    with col2:
-        st.header(f"📰 Senaste nyheter om {company_name}")
-        if not news_items:
-            st.write("Inga nyheter hittades.")
-        else:
-            news_analyses = []
-            for idx, item in enumerate(news_items[:max_news]):
-                st.markdown(f"### {item['title']}")
-                st.write(item['desc'])
-                combined_text = item['title'] + " " + item['desc']
-
-                with st.expander("Se AI-driven aktieanalys"):
-                    ai_analysis = analyze_news_with_stock(combined_text, stock_ticker)
-                    news_analyses.append(ai_analysis)
-                    st.markdown(ai_analysis)
-                st.markdown("---")
-
-            # Slutgiltig sammanfattning baserat på all nyhetsanalys + finansiell data
-            with st.container():
-                st.markdown("## 🔍 Slutgiltig Sammanfattande Analys")
-                summary = final_overall_analysis(stock_data, "\n\n".join(news_analyses))
-                st.markdown(summary)
-else:
-    st.info("Ange företagets namn och aktieticker i sidomenyn för att starta analysen.")
+        # PE-tal visuellt
+        pe_val = stock_data.get("P/E-tal")
+        if pe_val and pe_val != 'N/A':
+            percent, color, comment = pe_indicator(pe_val)
+            st.markdown(f"### P/E-tal-indikator")
+            st.progress(percent /
