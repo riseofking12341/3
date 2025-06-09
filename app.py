@@ -1,110 +1,71 @@
 import streamlit as st
 from GoogleNews import GoogleNews
 import yfinance as yf
-import openai
-import matplotlib.pyplot as plt
-from datetime import datetime
+from openai import OpenAI
 
-# --- OpenAI API-nyckel ---
-openai.api_key = st.secrets["OPENAI_API_KEY"]  # alternativt: openai.api_key = "din_nyckel"
+# Initiera OpenAI-klient
+client = OpenAI()
 
-st.set_page_config(page_title="Bolagsnyheter + Aktieanalys", layout="wide")
+st.title("Nyhetsanalys med aktiekoppling")
 
-st.title("Bolagsnyheter med aktie- och AI-analys")
+# Ange företag (bolagsnamn och ticker)
+company_name = st.text_input("Ange företagets namn (exempel: Tesla)")
+stock_ticker = st.text_input("Ange aktiens ticker (exempel: TSLA)")
 
-# Input från användaren
-company_name = st.text_input("Skriv bolagsnamn (t.ex. 'Tesla'):")
-stock_ticker = st.text_input("Skriv bolagets börsticker (t.ex. 'TSLA'):")
+def fetch_news(company):
+    googlenews = GoogleNews(lang='sv', period='7d')
+    googlenews.search(company)
+    results = googlenews.result()
+    return results
 
-if company_name and stock_ticker:
+def get_stock_data(ticker):
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    current_price = info.get('currentPrice', 'N/A')
+    market_cap = info.get('marketCap', 'N/A')
+    return current_price, market_cap
 
-    # Funktion: hämta nyheter
-    @st.cache_data(ttl=3600)
-    def fetch_news(query):
-        googlenews = GoogleNews(lang='sv', region='SE')
-        googlenews.search(query)
-        result = googlenews.result()
-        return result
+def analyze_news_with_stock(news_text, stock_ticker):
+    system_prompt = (
+        "Du är en finansiell analytiker. Analysera nyheten och bolagsdata och ge en kort och långsiktig prognos "
+        f"för aktien {stock_ticker} baserat på följande information:\n\n{news_text}"
+    )
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Ge en analys av hur detta påverkar aktiekursen på kort och lång sikt."}
+    ]
 
-    # Funktion: hämta aktiekurs och finansiell info
-    @st.cache_data(ttl=3600)
-    def fetch_stock_data(ticker):
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="1mo")
-        info = stock.info
-        return hist, info
-
-    # Funktion: plottar kursdata
-    def plot_stock(history):
-        fig, ax = plt.subplots()
-        ax.plot(history.index, history['Close'], label='Stängningspris')
-        ax.set_xlabel('Datum')
-        ax.set_ylabel('Pris (USD)')
-        ax.set_title('Aktiekurs senaste månaden')
-        ax.legend()
-        st.pyplot(fig)
-
-    # Funktion: analysera med OpenAI
-    @st.cache_data(ttl=3600)
-    def analyze_news_with_stock(news_text, ticker):
-        hist, info = fetch_stock_data(ticker)
-        close_prices = list(hist['Close'])
-        dates = [d.strftime("%Y-%m-%d") for d in hist.index]
-
-        price_summary = f"Stängningspriser senaste månaden: \n"
-        for date, price in zip(dates, close_prices):
-            price_summary += f"{date}: {price:.2f} USD\n"
-
-        financials = (
-            f"PE-ratio: {info.get('trailingPE', 'N/A')}, "
-            f"Marknadsvärde: {info.get('marketCap', 'N/A')}, "
-            f"Beta: {info.get('beta', 'N/A')}"
-        )
-
-        prompt = f"""
-        Här är en nyhet om bolaget {company_name}:
-        "{news_text}"
-
-        Aktiekursdata (senaste månaden):
-        {price_summary}
-
-        Finansiella nyckeltal:
-        {financials}
-
-        Analysera kortsiktiga och långsiktiga effekter av denna nyhet på bolagets aktiekurs.
-        """
-
-        response = openai.ChatCompletion.create(
+    try:
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
+            messages=messages,
+            max_tokens=500,
             temperature=0.7,
         )
-
         return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"AI API fel: {e}"
 
-    # --- Hämta och visa nyheter ---
+if company_name and stock_ticker:
+    st.subheader(f"Nyheter för {company_name}")
     news_items = fetch_news(company_name)
     if not news_items:
-        st.warning("Inga nyheter hittades för detta bolag.")
+        st.write("Inga nyheter hittades.")
     else:
-        st.subheader(f"Senaste nyheter om {company_name}:")
-        for i, item in enumerate(news_items[:5]):
-            st.markdown(f"### {item['title']}")
-            st.write(f"*Datum:* {item['date']}  \n*Beskrivning:* {item['desc']}  \n[Artikel]( {item['link']} )")
-
-            # Analysera varje nyhet
-            with st.spinner(f"Analyserar nyhet {i+1}..."):
-                ai_analysis = analyze_news_with_stock(item['title'] + " " + item['desc'], stock_ticker)
-                st.info(f"**AI-analys:**  \n{ai_analysis}")
-
+        current_price, market_cap = get_stock_data(stock_ticker)
+        st.write(f"Aktuellt pris: {current_price}")
+        st.write(f"Marknadsvärde: {market_cap}")
+        
+        for item in news_items[:5]:  # Visa max 5 nyheter
+            st.markdown(f"**{item['title']}**")
+            st.write(item['desc'])
+            
+            # Kombinera nyhet och bolagsnamn för analys
+            combined_text = item['title'] + " " + item['desc']
+            ai_analysis = analyze_news_with_stock(combined_text, stock_ticker)
+            st.markdown(f"**AI-analys:** {ai_analysis}")
             st.markdown("---")
 
-        # Visa aktiekursdiagram
-        st.subheader(f"Aktiekurs för {stock_ticker}")
-        hist, _ = fetch_stock_data(stock_ticker)
-        plot_stock(hist)
-
 else:
-    st.info("Fyll i både bolagsnamn och börsticker för att börja.")
-
+    st.info("Ange företagets namn och aktiens ticker för att starta analysen.")
