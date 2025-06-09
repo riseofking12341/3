@@ -4,3 +4,4 @@ GoogleNews
 yfinance
 matplotlib
 textblob
+plotly
