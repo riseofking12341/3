@@ -6,3 +6,4 @@ matplotlib
 textblob
 plotly
 feedparser
+requests
