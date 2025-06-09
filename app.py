@@ -2,7 +2,7 @@ import streamlit as st
 import openai
 from GoogleNews import GoogleNews
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+openai.api_key = st.secrets["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"]
 
 st.title("🔍 Smart Nyhetsanalys för Företag")
 company = st.text_input("🔎 Sök företag (ex: Astor Scandinavian Group)")
