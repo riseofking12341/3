@@ -1,6 +1,6 @@
 import streamlit as st
 import openai
-from googlenews import GoogleNews
+from GoogleNews import GoogleNews
 import datetime
 
 # API-nyckel hämtas från secrets
