@@ -1,7 +1,7 @@
 
 import streamlit as st
 import openai
-from googlenews import GoogleNews
+from GoogleNews import GoogleNews
 import datetime
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
