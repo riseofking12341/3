@@ -50,3 +50,5 @@ if st.button("Analysera nyheter") and company:
                 st.write(analysis)
             except Exception as e:
                 st.error(f"Fel vid analys: {e}")
+                st.write("🔐 API key loaded:", "OPENAI_API_KEY" in st.secrets)
+
