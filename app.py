@@ -14,12 +14,42 @@ st.markdown("""
 Denna app hämtar senaste nyheter om ett företag, kopplar ihop med aktiekursdata och ger AI-baserad kort- och långsiktig investeringsanalys.
 """)
 
-# Input från användare
+# Sidebar för input
 with st.sidebar:
     st.header("Ange Företagsinfo")
     company_name = st.text_input("Företagsnamn (ex: Tesla)", value="Tesla")
     stock_ticker = st.text_input("Aktieticker (ex: TSLA)", value="TSLA")
     max_news = st.slider("Max antal nyheter att visa", 1, 10, 5)
+
+def format_large_number(num):
+    """Formatera stora tal till miljarder eller miljoner med svensk notation"""
+    try:
+        num = float(num)
+    except (ValueError, TypeError):
+        return "N/A"
+
+    if num >= 1_000_000_000:
+        return f"{num / 1_000_000_000:.1f} Mdkr"
+    elif num >= 1_000_000:
+        return f"{num / 1_000_000:.1f} Mkr"
+    elif num >= 1_000:
+        return f"{num / 1_000:.1f} Tkr"
+    else:
+        return str(num)
+
+# Förklaringar för finansiella nyckeltal
+explanations = {
+    "Marknadsvärde": "Det totala värdet på alla bolagets aktier på marknaden. Beräknas som aktiekurs x antal utestående aktier.",
+    "P/E-tal": "Price/Earnings-tal visar hur mycket investerare är villiga att betala per vinstkrona. Hög P/E kan tyda på förväntningar om framtida tillväxt.",
+    "PEG-tal": "PEG-talet justerar P/E-talet för tillväxttakten i vinsten. Ett PEG runt 1 indikerar rättvist värderad aktie.",
+    "Utdelning (yield)": "Årlig utdelning i procent av aktiekursen. Visar hur stor del av vinsten som betalas ut till aktieägarna.",
+    "Beta (volatilitet)": "Mäter hur mycket aktien svänger jämfört med marknaden. Beta > 1 betyder högre risk och volatilitet.",
+    "52-veckors högsta": "Högsta aktiekurs under det senaste året.",
+    "52-veckors lägsta": "Lägsta aktiekurs under det senaste året.",
+    "Antal anställda": "Hur många personer som arbetar på bolaget.",
+    "Bransch": "Vilken industri eller sektor bolaget verkar inom.",
+    "Hemort": "Bolagets huvudkontorets stad."
+}
 
 def fetch_news(company):
     googlenews = GoogleNews(lang='sv', period='7d')
@@ -30,13 +60,13 @@ def fetch_news(company):
 def get_stock_data(ticker):
     stock = yf.Ticker(ticker)
     info = stock.info
-    # Hämta fler nyckeltal
+    # Hämta och formatera data
     data = {
         "Nuvarande pris": info.get('currentPrice', 'N/A'),
-        "Marknadsvärde": info.get('marketCap', 'N/A'),
+        "Marknadsvärde": format_large_number(info.get('marketCap')),
         "P/E-tal": info.get('trailingPE', 'N/A'),
         "PEG-tal": info.get('pegRatio', 'N/A'),
-        "Utdelning (yield)": info.get('dividendYield', 'N/A'),
+        "Utdelning (yield)": f"{info.get('dividendYield', 'N/A') * 100:.2f}%" if info.get('dividendYield') else "N/A",
         "Beta (volatilitet)": info.get('beta', 'N/A'),
         "52-veckors högsta": info.get('fiftyTwoWeekHigh', 'N/A'),
         "52-veckors lägsta": info.get('fiftyTwoWeekLow', 'N/A'),
@@ -77,7 +107,9 @@ if company_name and stock_ticker:
     with col1:
         st.header(f"📊 Aktiedata för {stock_ticker}")
         for key, value in stock_data.items():
-            st.write(f"**{key}:** {value}")
+            with st.expander(f"{key} - Förklaring"):
+                st.write(explanations.get(key, "Ingen förklaring tillgänglig."))
+                st.markdown(f"**Värde:** {value}")
 
     with col2:
         st.header(f"📰 Senaste nyheter om {company_name}")
@@ -88,7 +120,6 @@ if company_name and stock_ticker:
                 st.markdown(f"### {item['title']}")
                 st.write(item['desc'])
 
-                # Kombinera nyhet och bolagsnamn för AI-analys
                 combined_text = item['title'] + " " + item['desc']
 
                 with st.expander("Se AI-driven aktieanalys"):
