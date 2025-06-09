@@ -1,10 +1,10 @@
 import streamlit as st
-from OpenAI import OpenAI  # OBS! Stort O och AI
 from GoogleNews import GoogleNews
 import datetime
+import openai
 
-# Initiera OpenAI-klienten med API-nyckeln från Streamlit secrets
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# Använd API-nyckeln från Streamlit secrets
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 st.title("AI Nyhetsanalys för Företag & Aktier")
 
@@ -13,10 +13,9 @@ company = st.text_input("Ange företagsnamn (t.ex. Astor Scandinavian Group):")
 if company:
     with st.spinner("Hämtar nyheter..."):
         googlenews = GoogleNews(lang='sv')
-        googlenews.set_time_range(
-            (datetime.datetime.now() - datetime.timedelta(days=14)).strftime("%m/%d/%Y"),
-            datetime.datetime.now().strftime("%m/%d/%Y")
-        )
+        start_date = (datetime.datetime.now() - datetime.timedelta(days=14)).strftime("%m/%d/%Y")
+        end_date = datetime.datetime.now().strftime("%m/%d/%Y")
+        googlenews.set_time_range(start_date, end_date)
         googlenews.search(company)
         news_results = googlenews.results(sort=True)
 
@@ -47,7 +46,7 @@ Gör följande:
 Skriv på svenska, kortfattat och med klar slutsats.
 """
 
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
