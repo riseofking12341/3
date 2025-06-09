@@ -178,7 +178,6 @@ if company_name and stock_ticker:
     news_items = fetch_news(company_name)
     stock_data = get_stock_data(stock_ticker)
 
-    # LAYOUT
     col1, col2 = st.columns([2, 3])
 
     with col1:
@@ -190,7 +189,34 @@ if company_name and stock_ticker:
 
         # PE-tal visuellt
         pe_val = stock_data.get("P/E-tal")
-        if pe_val and pe_val != 'N/A':
+        if isinstance(pe_val, (float, int)):
             percent, color, comment = pe_indicator(pe_val)
-            st.markdown(f"### P/E-tal-indikator")
-            st.progress(percent /
+            st.markdown(f"<b>P/E-tal Indikator:</b> <span style='color:{color}; font-weight:bold'>{comment}</span>", unsafe_allow_html=True)
+            st.progress(percent / 100)
+        else:
+            st.info("P/E-tal saknas för att visa indikator.")
+
+    with col2:
+        st.markdown('<h2 class="subheader">📰 Senaste Nyheter</h2>', unsafe_allow_html=True)
+
+        summarized_news = []
+        for i, item in enumerate(news_items[:max_news]):
+            st.markdown(f'<div class="news-item">', unsafe_allow_html=True)
+            st.markdown(f"**{item['title']}**")
+            st.markdown(f"<i>{item['date']}</i>")
+            st.markdown(f"{item['desc']}")
+            with st.expander("Analys av denna nyhet med AI"):
+                analysis = analyze_news_with_stock(item['title'] + ". " + item['desc'], stock_ticker)
+                st.write(analysis)
+                summarized_news.append(analysis)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        # Slutgiltig analys
+        if summarized_news:
+            final_analysis = final_overall_analysis(stock_data, "\n\n".join(summarized_news))
+            st.markdown('<div class="analysis-box">')
+            st.markdown(f"### 🤖 Slutgiltig AI-analys\n\n{final_analysis}")
+            st.markdown('</div>')
+else:
+    st.info("Vänligen ange både företagsnamn och aktieticker i sidofältet.")
+
