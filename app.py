@@ -219,4 +219,3 @@ if company_name and stock_ticker:
             st.markdown('</div>')
 else:
     st.info("Vänligen ange både företagsnamn och aktieticker i sidofältet.")
-
