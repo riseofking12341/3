@@ -2,7 +2,6 @@ import streamlit as st
 from GoogleNews import GoogleNews
 import datetime
 from openai import OpenAI
-import openai
 
 # Initiera OpenAI-klienten
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -11,7 +10,7 @@ st.title("AI Nyhetsanalys för Företag & Aktier")
 
 company = st.text_input("Ange företagsnamn (t.ex. Astor Scandinavian Group):")
 
-@st.cache_data(ttl=1800)  # Cache i 30 minuter
+@st.cache_data(ttl=1800)  # Cache nyhetssökning i 30 minuter
 def fetch_news(company_name):
     googlenews = GoogleNews(lang='sv')
     start_date = (datetime.datetime.now() - datetime.timedelta(days=14)).strftime("%m/%d/%Y")
@@ -29,7 +28,6 @@ def fetch_news(company_name):
     
     return "\n\n".join(news_items) if news_items else "Inga nyheter hittades."
 
-@st.cache_data(ttl=1800)
 def get_ai_analysis(prompt, model="gpt-3.5-turbo"):
     try:
         response = client.chat.completions.create(
@@ -38,10 +36,8 @@ def get_ai_analysis(prompt, model="gpt-3.5-turbo"):
             temperature=0.7,
         )
         return response.choices[0].message.content
-    except openai.error.RateLimitError:
-        return "API-anropsgränsen är nådd. Vänligen försök igen om några minuter."
-    except openai.error.OpenAIError as e:
-        return f"Ett API-fel uppstod: {str(e)}"
+    except Exception as e:
+        return f"AI API fel: {e}"
 
 if company:
     with st.spinner("Hämtar nyheter..."):
