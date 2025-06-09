@@ -1,249 +1,159 @@
 import streamlit as st
-import openai
 import yfinance as yf
-import datetime
-import requests
-import numpy as np
-import pandas as pd
-from textblob import TextBlob  # För enkel sentimentanalys, installera med pip install textblob
+import feedparser
+from openai import OpenAI
 import plotly.graph_objects as go
-import plotly.express as px
+from textblob import TextBlob
 
-# --- KONFIGURATION ---
-openai.api_key = st.secrets["OPENAI_API_KEY"]
-
-# --- Funktioner ---
-
-def format_large_number(num):
-    """Formaterar stora tal till miljarder/miljoner."""
-    try:
-        num = float(num)
-        if num >= 1e12:
-            return f"{num / 1e12:.2f} T"
-        elif num >= 1e9:
-            return f"{num / 1e9:.2f} miljarder"
-        elif num >= 1e6:
-            return f"{num / 1e6:.2f} miljoner"
-        elif num >= 1e3:
-            return f"{num / 1e3:.2f} tusen"
-        else:
-            return f"{num:.2f}"
-    except:
-        return "N/A"
-
-def fetch_company_data(ticker):
-    """Hämtar finansiella data från yfinance."""
-    stock = yf.Ticker(ticker)
-    info = stock.info
-
-    data = {
-        "Namn": info.get("longName", "N/A"),
-        "Ticker": ticker,
-        "Marknadsvärde": format_large_number(info.get("marketCap", 0)),
-        "P/E": info.get("trailingPE", "N/A"),
-        "PEG": info.get("pegRatio", "N/A"),
-        "Beta": info.get("beta", "N/A"),
-        "Skuldsättningsgrad": info.get("debtToEquity", "N/A"),
-        "Direktavkastning (%)": info.get("dividendYield", 0)*100 if info.get("dividendYield") else "N/A",
-        "Senaste kvartalsrapport": info.get("lastFiscalYearEnd", "N/A"),
-        "Aktuell kurs": info.get("regularMarketPrice", "N/A"),
-        "52v hög": info.get("fiftyTwoWeekHigh", "N/A"),
-        "52v låg": info.get("fiftyTwoWeekLow", "N/A"),
-    }
-    return data
-
-def fetch_news(ticker):
-    """Mockup nyhetsfunktion - byt till riktig RSS eller nyhets-API."""
-    # Exempel RSS URL från Yahoo Finance
-    url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
-    try:
-        resp = requests.get(url)
-        from xml.etree import ElementTree
-        root = ElementTree.fromstring(resp.content)
-        items = root.findall(".//item")
-        news = []
-        for item in items[:10]:
-            title = item.find("title").text
-            desc = item.find("description").text
-            pubDate = item.find("pubDate").text
-            news.append({"title": title, "desc": desc, "date": pubDate})
-        return news
-    except Exception as e:
-        return []
-
-def sentiment_analysis(text):
-    """Gör enkel sentimentanalys med TextBlob."""
-    blob = TextBlob(text)
-    polarity = blob.sentiment.polarity
-    if polarity > 0.1:
-        return "Positiv", polarity
-    elif polarity < -0.1:
-        return "Negativ", polarity
-    else:
-        return "Neutral", polarity
-
-def ai_stock_analysis(news_summary, financial_data):
-    """Använder OpenAI för att analysera nyheter och finansdata."""
-    prompt = f"""
-    Du är en erfaren aktieanalytiker.
-    Här är kort nyhetssammanfattning: {news_summary}
-    Här är bolagets nyckeltal:
-    Marknadsvärde: {financial_data['Marknadsvärde']}
-    P/E: {financial_data['P/E']}
-    PEG: {financial_data['PEG']}
-    Beta: {financial_data['Beta']}
-    Skuldsättningsgrad: {financial_data['Skuldsättningsgrad']}
-    Direktavkastning (%): {financial_data['Direktavkastning (%)']}
-    Aktuell kurs: {financial_data['Aktuell kurs']}
-    52 veckors högsta: {financial_data['52v hög']}
-    52 veckors lägsta: {financial_data['52v låg']}
-    
-    Ge en kort analys om hur nyheter och finansiell data kan påverka aktiekursen på kort och lång sikt.
-    Ge också en slutlig rekommendation: är det värt att gå igenom kvartalsrapporterna och varför?
-    """
-
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Du är en hjälpsam aktieanalysassistent."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=400,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"AI API fel: {e}"
-
-def normalize_pe(pe, industry_pe=20):
-    """Jämför P/E med branschstandard och ger risknivå."""
-    if pe == "N/A" or pe is None:
-        return "Ingen data"
-    try:
-        pe = float(pe)
-        if pe < industry_pe * 0.7:
-            return "Lågt (kan vara undervärderat)"
-        elif pe > industry_pe * 1.3:
-            return "Högt (kan vara övervärderat)"
-        else:
-            return "Normal"
-    except:
-        return "Ingen data"
-
-# --- UI ---
+# Initiera OpenAI-klienten med din API-nyckel (sätt i miljövariabel OPENAI_API_KEY)
+client = OpenAI()
 
 st.set_page_config(page_title="Avancerad Aktie & Nyhetsanalys", layout="wide")
 
-st.title("📈 Avancerad Aktie & Nyhetsanalys")
+def format_large_number(num):
+    if num >= 1_000_000_000:
+        return f"{num/1_000_000_000:.2f} miljarder"
+    elif num >= 1_000_000:
+        return f"{num/1_000_000:.2f} miljoner"
+    elif num >= 1_000:
+        return f"{num/1_000:.2f} tusen"
+    else:
+        return str(num)
 
-st.sidebar.header("Välj Aktie")
-ticker = st.sidebar.text_input("Ange aktiens ticker (t.ex. AAPL, TSLA, ABB)", value="AAPL").upper()
+def fetch_stock_data(ticker):
+    stock = yf.Ticker(ticker)
+    info = stock.info
+    financials = {
+        "Marknadsvärde": format_large_number(info.get("marketCap", 0)),
+        "P/E-tal": info.get("trailingPE", None),
+        "PEG-tal": info.get("pegRatio", None),
+        "Direktavkastning": info.get("dividendYield", None),
+        "EPS": info.get("trailingEps", None),
+        "Beta": info.get("beta", None),
+        "52 veckors högsta": info.get("fiftyTwoWeekHigh", None),
+        "52 veckors lägsta": info.get("fiftyTwoWeekLow", None),
+        "Senaste pris": info.get("previousClose", None),
+    }
+    return financials
 
-if ticker:
+def analyze_sentiment(text):
+    analysis = TextBlob(text)
+    polarity = analysis.sentiment.polarity
+    if polarity > 0.1:
+        return "Positiv"
+    elif polarity < -0.1:
+        return "Negativ"
+    else:
+        return "Neutral"
+
+def fetch_news(ticker):
+    rss_url = f"https://news.google.com/rss/search?q={ticker}"
+    feed = feedparser.parse(rss_url)
+    return feed.entries[:5]  # Ta max 5 nyheter
+
+def create_pe_comparison_chart(pe, sector_pe=20):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=pe if pe else 0,
+        title={'text': "P/E-tal"},
+        gauge={
+            'axis': {'range': [0, 50]},
+            'bar': {'color': "darkblue"},
+            'steps': [
+                {'range': [0, sector_pe], 'color': "lightgreen"},
+                {'range': [sector_pe, 50], 'color': "lightcoral"}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': sector_pe}
+        }
+    ))
+    return fig
+
+def generate_ai_analysis(news_text, financials):
+    system_prompt = (
+        "Du är en finansanalytiker som analyserar företagsnyheter och finansiella nyckeltal. "
+        "Ge en kort analys om hur nyheterna kan påverka aktiens pris på kort och lång sikt. "
+        "Ta hänsyn till P/E-tal, PEG-tal, direktavkastning, beta och senaste kvartalsrapportens betydelse."
+    )
+    user_prompt = f"Nyheter: {news_text}\nNyckeltal: {financials}\nGe en slutsats om börsen."
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=messages,
+        max_tokens=400,
+        temperature=0.7,
+    )
+
+    return response.choices[0].message.content.strip()
+
+def main():
+    st.title("📈 Avancerad Aktie- och Nyhetsanalys")
+
+    ticker = st.text_input("Ange bolagets ticker (t.ex. AAPL, TSLA, NOKIA):").upper()
+    if not ticker:
+        st.info("Ange en ticker för att börja analysen.")
+        return
+
     with st.spinner("Hämtar data..."):
-        financials = fetch_company_data(ticker)
+        financials = fetch_stock_data(ticker)
         news_items = fetch_news(ticker)
 
-    st.header(f"{financials['Namn']} ({financials['Ticker']})")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Finansiella nyckeltal")
-        st.markdown(f"- **Marknadsvärde:** {financials['Marknadsvärde']}")
-        st.markdown(f"- **P/E-tal:** {financials['P/E']} ({normalize_pe(financials['P/E'])})")
-        st.markdown(f"- **PEG-tal:** {financials['PEG']}")
-        st.markdown(f"- **Beta (volatilitet):** {financials['Beta']}")
-        st.markdown(f"- **Skuldsättningsgrad:** {financials['Skuldsättningsgrad']}")
-        st.markdown(f"- **Direktavkastning (%):** {financials['Direktavkastning (%)']}")
-        st.markdown(f"- **Aktuell kurs:** {financials['Aktuell kurs']}")
-        st.markdown(f"- **52 veckors hög/låg:** {financials['52v hög']} / {financials['52v låg']}")
-        
+    # Finansiella nyckeltal
+    st.header(f"Nyckeltal för {ticker}")
+    cols = st.columns(3)
+    with cols[0]:
+        st.metric("Marknadsvärde", financials["Marknadsvärde"])
+        with st.expander("Vad betyder Marknadsvärde?"):
+            st.write("Totalt värde av alla aktier i företaget. Större värde betyder ofta större företag.")
+    with cols[1]:
+        st.metric("P/E-tal", f"{financials['P/E-tal'] if financials['P/E-tal'] else 'N/A'}")
         with st.expander("Vad betyder P/E-tal?"):
-            st.write("""
-            P/E-tal (Price-to-Earnings) visar hur marknaden värderar bolagets vinst. 
-            Ett högt P/E kan indikera höga förväntningar på framtida tillväxt, men också övervärdering. 
-            Ett lågt P/E kan tyda på undervärdering eller problem i bolaget.
-            """)
+            st.write("Pris/Vinst-tal. Visar hur marknaden värderar vinsten. Lägre är ofta bättre, men beror på bransch.")
+    with cols[2]:
+        st.metric("Direktavkastning", f"{financials['Direktavkastning']*100:.2f}%" if financials["Direktavkastning"] else "N/A")
+        with st.expander("Vad betyder Direktavkastning?"):
+            st.write("Utdelning i procent av aktiekursen. Bra för investerare som vill ha utdelning.")
 
-        with st.expander("Vad betyder Beta?"):
-            st.write("""
-            Beta mäter hur volatil aktien är jämfört med marknaden. 
-            En beta på 1 innebär att aktien rör sig i takt med marknaden. 
-            Högre beta betyder högre volatilitet och risk.
-            """)
+    # P/E-tal jämförelse
+    sector_avg_pe = 20  # Sätt en standard för sektorn eller hämta dynamiskt om möjligt
+    fig = create_pe_comparison_chart(financials['P/E-tal'], sector_avg_pe)
+    st.plotly_chart(fig, use_container_width=True)
 
-    with col2:
-        st.subheader("Senaste nyheter och sentiment")
-        for item in news_items:
-            sentiment, polarity = sentiment_analysis(item["title"])
-            color = "green" if sentiment == "Positiv" else "red" if sentiment == "Negativ" else "grey"
-            st.markdown(f"**{item['title']}**  ({item['date']})")
-            st.markdown(f"*Sentiment:* <span style='color:{color}'>{sentiment}</span>", unsafe_allow_html=True)
-            st.markdown(f"{item['desc']}")
-            st.markdown("---")
+    # Visa nyheter och AI-analys
+    st.header("Senaste nyheter och analys")
+    for item in news_items:
+        title = item.get("title", "")
+        desc = item.get("summary", "")
+        st.subheader(title)
+        st.write(desc)
 
-    # Sammanfatta nyheterna för AI-analys
-    news_text = " ".join([item["title"] + ". " + item["desc"] for item in news_items])
-    if len(news_text) > 2000:
-        news_text = news_text[:2000]  # Begränsa längd för API
+        sentiment = analyze_sentiment(title + " " + desc)
+        st.markdown(f"**Sentiment:** {sentiment}")
 
-    st.subheader("AI-driven analys av aktien och nyhetsläget")
-    ai_result = ai_stock_analysis(news_text, financials)
-    st.info(ai_result)
+        with st.spinner("Analyserar nyheter med AI..."):
+            analysis = generate_ai_analysis(title + " " + desc, financials)
+            st.markdown(f"**AI-Analys:** {analysis}")
 
-    # Portfölj och scoring (mockup)
-    st.header("Din portfölj")
-    portfolio = st.text_area("Lista dina tickers separerade med kommatecken", value="AAPL,TSLA,MSFT")
-    if st.button("Analysera portfölj"):
-        tickers = [t.strip().upper() for t in portfolio.split(",") if t.strip()]
-        scores = []
-        for t in tickers:
-            d = fetch_company_data(t)
-            pe = d.get("P/E")
-            pe_score = 0
-            try:
-                pe_val = float(pe)
-                pe_score = max(0, min(10, 10 - (pe_val / 50 * 10)))  # Simpelt poängsystem: lägre PE = högre score
-            except:
-                pe_score = 5
-            scores.append({"Ticker": t, "PE-poäng": pe_score})
-        df_scores = pd.DataFrame(scores)
-        fig = px.bar(df_scores, x="Ticker", y="PE-poäng", title="PE-poäng per aktie i portföljen")
-        st.plotly_chart(fig)
+        st.divider()
 
-    # Notifiering (mockup)
-    st.header("Notifikationer")
-    email = st.text_input("Ange din e-post för notifikationer (ej aktiverat ännu)")
-    if st.button("Aktivera notifikationer"):
-        st.warning("Notifikationer är ännu inte implementerade men kommer snart!")
+    # Slutgiltig ekonomisk analys
+    st.header("Slutgiltig ekonomisk bedömning")
+    pe = financials['P/E-tal']
+    if pe is None:
+        st.write("Ingen tillräcklig data för P/E-tal. Kontrollera kvartalsrapporter för mer info.")
+    elif pe < sector_avg_pe:
+        st.success("P/E-talet är lägre än sektorns genomsnitt, vilket kan indikera undervärdering. Det kan vara värt att gå igenom kvartalsrapporterna noggrant.")
+    else:
+        st.warning("P/E-talet är högre än sektorns genomsnitt, vilket kan indikera att aktien är högt värderad. Var försiktig och granska kvartalsrapporterna noga.")
 
-    # Utbildning
-    st.header("Utbildning om aktieanalys")
-    with st.expander("Vad är P/E-tal?"):
-        st.write("""
-        P/E-tal (Price/Earnings ratio) visar hur mycket investerare är villiga att betala för varje krona i vinst. 
-        Ett högt P/E kan tyda på höga framtidsförväntningar, medan ett lågt P/E kan tyda på undervärdering eller risk.
-        """)
+    st.write("**Notera:** Denna analys är endast vägledande och bör kompletteras med egen research.")
 
-    with st.expander("Hur tolka Beta?"):
-        st.write("""
-        Beta visar hur mycket aktien rör sig jämfört med marknaden.
-        En beta på 1 betyder att aktien rör sig lika mycket som marknaden. 
-        En beta över 1 innebär högre volatilitet och risk.
-        """)
-
-    with st.expander("Vad är PEG-tal?"):
-        st.write("""
-        PEG-tal (P/E tillväxt) justerar P/E efter förväntad vinsttillväxt. Ett PEG under 1 kan tyda på undervärdering.
-        """)
-
-    with st.expander("Hur tolka nyhetssentiment?"):
-        st.write("""
-        Positiva nyheter kan driva upp aktiekursen medan negativa nyheter kan skapa osäkerhet och säljtryck.
-        Sentimentanalys hjälper dig bedöma om nyheterna är bra eller dåliga för aktien.
-        """)
-
-    st.markdown("---")
-    st.caption("Appen är en demo och bör inte ses som investeringsråd. Kontrollera alltid flera källor.")
-
+if __name__ == "__main__":
+    main()
