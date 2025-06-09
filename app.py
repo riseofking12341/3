@@ -1,10 +1,10 @@
-
 import streamlit as st
-import openai
+from OpenAI import OpenAI  # OBS! Stort O och AI
 from GoogleNews import GoogleNews
 import datetime
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# Initiera OpenAI-klienten med API-nyckeln från Streamlit secrets
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 st.title("AI Nyhetsanalys för Företag & Aktier")
 
@@ -47,7 +47,7 @@ Gör följande:
 Skriv på svenska, kortfattat och med klar slutsats.
 """
 
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
