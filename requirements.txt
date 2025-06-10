@@ -1,9 +1,8 @@
 streamlit
-openai>=0.27.0
-GoogleNews
+openai>=1.0.0
 yfinance
-matplotlib
-textblob
-plotly
-feedparser
 requests
+plotly
+pandas
+textblob
+
