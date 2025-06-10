@@ -1,12 +1,11 @@
 import streamlit as st
 import yfinance as yf
-import pandas as pd
 from GoogleNews import GoogleNews
-from openai import OpenAI
+import openai
 import datetime
 
-# Setup OpenAI client
-client = OpenAI(api_key=st.secrets["openai_api_key"])
+# Setup OpenAI API key
+openai.api_key = st.secrets["openai_api_key"]
 
 def get_ticker_info(ticker):
     try:
@@ -28,22 +27,25 @@ def get_ticker_info(ticker):
 def fetch_news(query):
     googlenews = GoogleNews(lang='en', period='7d')
     googlenews.search(query)
-    return googlenews.results(sort=True)
+    results = googlenews.results(sort=True)
+    return results
 
 def extract_relevant_news(company_info):
     direct_news = fetch_news(company_info["shortName"])
     indirect_queries = [company_info["sector"], company_info["industry"]]
 
-    material_keywords = ["raw material", "supply chain", "tariff", "shortage"]
+    material_keywords = ["raw material", "supply chain", "tariff", "shortage", "regulation", "policy"]
     indirect_news = []
     for topic in indirect_queries:
-        for keyword in material_keywords:
-            topic_query = f"{topic} {keyword}"
-            indirect_news += fetch_news(topic_query)
+        if topic and topic != "N/A":
+            for keyword in material_keywords:
+                topic_query = f"{topic} {keyword}"
+                indirect_news += fetch_news(topic_query)
+    # Ta max 5 nyheter vardera för prestanda
     return direct_news[:5], indirect_news[:5]
 
 def analyze_with_ai(company, direct_news, indirect_news, financials):
-    news_text = "\n".join([n["title"] + ". " + n["desc"] for n in direct_news + indirect_news])
+    news_text = "\n".join([n["title"] + ". " + (n.get("desc") or "") for n in direct_news + indirect_news])
     message = f"""
 You are a financial analyst. Analyze the potential upside and downside of the company {company}. 
 Here is a summary of the financials: {financials}. 
@@ -51,8 +53,8 @@ And here are recent news headlines:
 {news_text}
 
 Explain how these factors may affect the stock's future and if there are hidden risks or opportunities based on indirect news.
-    """
-    response = client.chat.completions.create(
+"""
+    response = openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "You are a financial analyst who gives short and clear investment summaries."},
@@ -65,7 +67,7 @@ Explain how these factors may affect the stock's future and if there are hidden 
 st.set_page_config(page_title="Stock Deep Dive AI", layout="wide")
 st.title("📈 AI-Powered Stock Analysis Tool")
 
-company_input = st.text_input("Enter a company's ticker symbol (e.g., TSLA)")
+company_input = st.text_input("Enter a company's ticker symbol (e.g., TSLA)").upper().strip()
 
 if company_input:
     info = get_ticker_info(company_input)
@@ -87,13 +89,20 @@ if company_input:
         direct, indirect = extract_relevant_news(info)
 
         st.markdown("### 🔍 Direct News")
-        for n in direct:
-            st.markdown(f"**{n['title']}**\n{n['desc']}\n[Read more]({n['link']})")
+        if direct:
+            for n in direct:
+                st.markdown(f"**{n['title']}**\n{n.get('desc', '')}\n[Read more]({n['link']})")
+        else:
+            st.write("No direct news found.")
 
         st.markdown("### 🌐 Indirect/Industry-related News")
-        for n in indirect:
-            st.markdown(f"**{n['title']}**\n{n['desc']}\n[Read more]({n['link']})")
+        if indirect:
+            for n in indirect:
+                st.markdown(f"**{n['title']}**\n{n.get('desc', '')}\n[Read more]({n['link']})")
+        else:
+            st.write("No indirect news found.")
 
         st.subheader("📊 AI Investment Insight")
-        ai_analysis = analyze_with_ai(info["shortName"], direct, indirect, info)
+        with st.spinner("Analyzing with AI..."):
+            ai_analysis = analyze_with_ai(info["shortName"], direct, indirect, info)
         st.write(ai_analysis)
