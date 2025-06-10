@@ -1,164 +1,99 @@
-# stock_analysis_app.py
 import streamlit as st
-from yfinance import Ticker
-from GoogleNews import GoogleNews
+import yfinance as yf
 import pandas as pd
-import openai
-import os
+from GoogleNews import GoogleNews
+from openai import OpenAI
+import datetime
 
-# -- Configuration and API keys --
-openai.api_key = st.secrets.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+# Setup OpenAI client
+client = OpenAI(api_key=st.secrets["openai_api_key"])
 
-st.set_page_config(page_title="Stock Analyzer", layout="wide")
-st.title("📈 AI-Powered Stock Analysis")
-
-# -- Input: Company name --
-company_name = st.text_input("Enter a company name (e.g. Tesla)", value="Tesla").strip()
-if company_name:
-    # -- 1. Find stock ticker using GPT-4 --
+def get_ticker_info(ticker):
     try:
-        ticker_resp = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that provides stock ticker symbols."},
-                {"role": "user", "content": f"What is the stock ticker symbol for the company {company_name}?"}
-            ]
-        )
-        ticker_symbol = ticker_resp['choices'][0]['message']['content'].split()[0].upper().strip()
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        return {
+            "shortName": info.get("shortName", "N/A"),
+            "sector": info.get("sector", "N/A"),
+            "industry": info.get("industry", "N/A"),
+            "peRatio": info.get("trailingPE", "N/A"),
+            "marketCap": info.get("marketCap", "N/A"),
+            "forwardPE": info.get("forwardPE", "N/A"),
+            "dividendYield": info.get("dividendYield", "N/A"),
+            "description": info.get("longBusinessSummary", "N/A")
+        }
     except Exception as e:
-        st.error("Error finding ticker: " + str(e))
-        ticker_symbol = None
+        return None
 
-    if ticker_symbol:
-        st.write(f"**Ticker:** {ticker_symbol}")
+def fetch_news(query):
+    googlenews = GoogleNews(lang='en', period='7d')
+    googlenews.search(query)
+    return googlenews.results(sort=True)
 
-        # -- 2. Fetch recent news (direct) --
-        googlenews = GoogleNews(lang='en', period='7d')
-        googlenews.search(company_name)
-        direct_news = googlenews.results()
-        # Extract relevant fields
-        direct_articles = []
-        for item in direct_news:
-            title = item.get("title")
-            media = item.get("media")
-            date = item.get("date")
-            link = item.get("link")
-            direct_articles.append({"title": title, "media": media, "date": date, "link": link})
+def extract_relevant_news(company_info):
+    direct_news = fetch_news(company_info["shortName"])
+    indirect_queries = [company_info["sector"], company_info["industry"]]
 
-        # -- 3. Fetch related topics using GPT-4 for indirect news --
-        try:
-            topics_resp = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are an expert in business research."},
-                    {"role": "user", "content": f"Suggest 3-5 related industry topics or supply-chain terms for the company {company_name} (comma-separated)."}
-                ]
-            )
-            topics_list = topics_resp['choices'][0]['message']['content']
-            # Parse comma-separated list
-            related_topics = [t.strip() for t in topics_list.replace(".", "").split(",") if t.strip()]
-        except Exception:
-            related_topics = []
+    material_keywords = ["raw material", "supply chain", "tariff", "shortage"]
+    indirect_news = []
+    for topic in indirect_queries:
+        for keyword in material_keywords:
+            topic_query = f"{topic} {keyword}"
+            indirect_news += fetch_news(topic_query)
+    return direct_news[:5], indirect_news[:5]
 
-        # -- 4. Fetch news on related topics (indirect) --
-        indirect_articles = []
-        for topic in related_topics:
-            googlenews.search(topic)
-            for item in googlenews.results():
-                indirect_articles.append({
-                    "title": item.get("title"),
-                    "media": item.get("media"),
-                    "date": item.get("date"),
-                    "link": item.get("link")
-                })
-            googlenews.clear()
+def analyze_with_ai(company, direct_news, indirect_news, financials):
+    news_text = "\n".join([n["title"] + ". " + n["desc"] for n in direct_news + indirect_news])
+    message = f"""
+You are a financial analyst. Analyze the potential upside and downside of the company {company}. 
+Here is a summary of the financials: {financials}. 
+And here are recent news headlines:
+{news_text}
 
-        # -- UI: News Overview --
-        st.header("📰 News Overview")
-        if direct_articles:
-            st.subheader("Direct News (Company-specific)")
-            for art in direct_articles:
-                st.markdown(f"- **{art['date']}** – [{art['title']}]({art['link']}) ({art['media']})")
-        else:
-            st.write("No direct news found.")
+Explain how these factors may affect the stock's future and if there are hidden risks or opportunities based on indirect news.
+    """
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a financial analyst who gives short and clear investment summaries."},
+            {"role": "user", "content": message}
+        ]
+    )
+    return response.choices[0].message.content
 
-        if related_topics:
-            st.subheader("Indirect News (Related Topics)")
-            for art in indirect_articles:
-                st.markdown(f"- **{art['date']}** – [{art['title']}]({art['link']}) ({art['media']})")
-        else:
-            st.write("No indirect topics or news found.")
+# Streamlit UI
+st.set_page_config(page_title="Stock Deep Dive AI", layout="wide")
+st.title("📈 AI-Powered Stock Analysis Tool")
 
-        # -- 5. Fetch financial metrics with yfinance --
-        try:
-            ticker = Ticker(ticker_symbol)
-            info = ticker.info
-        except Exception as e:
-            st.error("Error fetching financial data: " + str(e))
-            info = {}
+company_input = st.text_input("Enter a company's ticker symbol (e.g., TSLA)")
 
-        # Extract metrics
-        market_cap = info.get("marketCap")
-        pe_ratio = info.get("trailingPE")
-        eps = info.get("trailingEps")
-        roe = info.get("returnOnEquity")
-        debt = info.get("totalDebt")
+if company_input:
+    info = get_ticker_info(company_input)
+    if not info:
+        st.error("Error fetching stock data. Please check the symbol.")
+    else:
+        st.subheader(f"Basic Info about {info['shortName']}")
+        st.markdown(f"**Sector:** {info['sector']}")
+        st.markdown(f"**Industry:** {info['industry']}")
+        st.markdown(f"**P/E Ratio:** {info['peRatio']}")
+        st.markdown(f"**Forward P/E:** {info['forwardPE']}")
+        st.markdown(f"**Market Cap:** {info['marketCap']}")
+        st.markdown(f"**Dividend Yield:** {info['dividendYield']}")
 
-        # Format large numbers (e.g., market cap in billions)
-        def fmt_number(x):
-            if x is None:
-                return "N/A"
-            for unit in [("T", 1e12), ("B", 1e9), ("M", 1e6), ("k", 1e3)]:
-                if abs(x) >= unit[1]:
-                    return f"{x/unit[1]:.2f}{unit[0]}"
-            return str(x)
+        with st.expander("📄 Company Description"):
+            st.write(info['description'])
 
-        market_cap_str = fmt_number(market_cap) if market_cap else "N/A"
-        pe_str = f"{pe_ratio:.2f}" if pe_ratio else "N/A"
-        eps_str = f"{eps:.2f}" if eps else "N/A"
-        roe_str = f"{roe*100:.1f}%" if roe else "N/A"
-        debt_str = fmt_number(debt) if debt else "N/A"
+        st.subheader("📰 News Analysis")
+        direct, indirect = extract_relevant_news(info)
 
-        # -- UI: Financial Metrics --
-        st.header("💰 Financial Metrics")
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Market Cap", market_cap_str)
-        col2.metric("P/E Ratio", pe_str)
-        col3.metric("EPS (TTM)", eps_str)
-        col4.metric("Return on Equity (ROE)", roe_str)
-        col5.metric("Total Debt", debt_str)
+        st.markdown("### 🔍 Direct News")
+        for n in direct:
+            st.markdown(f"**{n['title']}**\n{n['desc']}\n[Read more]({n['link']})")
 
-        # Expanders for definitions
-        with st.expander("What is Market Cap?"):
-            st.write("Market capitalization (market cap) is the total value of all a company's outstanding shares. It’s calculated as share price × total shares:contentReference[oaicite:8]{index=8}.")
-        with st.expander("What is P/E Ratio?"):
-            st.write("The Price/Earnings (P/E) ratio equals the stock price divided by earnings per share:contentReference[oaicite:9]{index=9}. A lower P/E can imply a stock is undervalued, while a higher P/E may suggest high growth expectations.")
-        with st.expander("What is EPS?"):
-            st.write("Earnings Per Share (EPS) is the portion of a company’s profit allocated to each outstanding share. It’s net income divided by shares outstanding:contentReference[oaicite:10]{index=10}.")
-        with st.expander("What is ROE?"):
-            st.write("Return on Equity (ROE) measures profitability relative to shareholder equity (net income ÷ equity):contentReference[oaicite:11]{index=11}. A higher ROE means the company is efficient at generating profits from its equity.")
-        with st.expander("What is Total Debt?"):
-            st.write("Total Debt is the sum of a company’s short- and long-term interest-bearing liabilities. High debt levels can affect financial risk and leverage.")
+        st.markdown("### 🌐 Indirect/Industry-related News")
+        for n in indirect:
+            st.markdown(f"**{n['title']}**\n{n['desc']}\n[Read more]({n['link']})")
 
-        # -- 6. AI Insights (GPT-4 Analysis) --
-        st.header("🤖 AI Insights")
-        ai_prompt = f"""
-        You are a financial analyst assistant. The company is **{company_name}** ({ticker_symbol}). 
-        Recent direct news headlines:\n""" + "\n".join([f"- {art['title']}" for art in direct_articles[:5]]) + \
-        "\nIndirect news topics: " + ", ".join(related_topics[:5]) + \
-        f"\nFinancial metrics: Market Cap {market_cap_str}, P/E {pe_str}, EPS {eps_str}, ROE {roe_str}, Debt {debt_str}.\n" + \
-        "Based on this information, write an analysis structured with sections for **Risk Factors**, **Upside Potential**, **Macro Events** to watch, and a **Final Verdict** on the investment outlook."
-        try:
-            analysis_resp = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are an expert stock analysis assistant."},
-                    {"role": "user", "content": ai_prompt}
-                ]
-            )
-            analysis_text = analysis_resp['choices'][0]['message']['content']
-        except Exception as e:
-            analysis_text = "Error running AI analysis: " + str(e)
-
-        # Display the AI analysis (which includes risk, upside, macro, verdict)
-        st.markdown(analysis_text)
+        st.subheader("📊 AI Investment Insight")
+        ai_analysis = analyze_with_ai(info["shortName"], direct, indirect, info)
+        st.write(ai_analysis)
