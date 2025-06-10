@@ -1,8 +1,11 @@
 streamlit
 openai>=1.0.0
-yfinance
 requests
-plotly
+yfinance
 pandas
-textblob
+plotly
+python-dotenv
+beautifulsoup4
+html5lib
+tqdm
 
