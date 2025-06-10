@@ -1,8 +1,9 @@
 streamlit
-openai>=2.7.0
-yfinance
+openai==2.7.0
 GoogleNews
-textblob
+yfinance
+pandas
+
 
 
 
