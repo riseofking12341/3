@@ -1,11 +1,6 @@
 streamlit
+GoogleNews
 openai>=1.0.0
-requests
 yfinance
-pandas
-plotly
-python-dotenv
-beautifulsoup4
-html5lib
-tqdm
+
 
