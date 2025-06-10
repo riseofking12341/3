@@ -1,6 +1,7 @@
+openai>=2.7.0
 streamlit
 GoogleNews
-openai>=1.0.0
 yfinance
+
 
 
