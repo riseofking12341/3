@@ -1,154 +1,164 @@
+# stock_analysis_app.py
 import streamlit as st
+from yfinance import Ticker
 from GoogleNews import GoogleNews
+import pandas as pd
 import openai
-import yfinance as yf
+import os
 
-# --- Setup API-nycklar ---
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# -- Configuration and API keys --
+openai.api_key = st.secrets.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
 
-# --- Hjälpfunktioner ---
+st.set_page_config(page_title="Stock Analyzer", layout="wide")
+st.title("📈 AI-Powered Stock Analysis")
 
-def format_large_number(num):
-    if num is None:
-        return "N/A"
-    num = float(num)
-    if num >= 1_000_000_000:
-        return f"{num/1_000_000_000:.2f} miljarder"
-    elif num >= 1_000_000:
-        return f"{num/1_000_000:.2f} miljoner"
-    elif num >= 1_000:
-        return f"{num/1_000:.2f} tusen"
-    else:
-        return str(num)
-
-def fetch_google_news(query, max_results=10):
-    googlenews = GoogleNews(lang='sv', region='SE')
-    googlenews.clear()
-    googlenews.search(query)
-    result = googlenews.result()
-    # Returnera max_results artiklar
-    return result[:max_results]
-
-def get_stock_data(ticker):
+# -- Input: Company name --
+company_name = st.text_input("Enter a company name (e.g. Tesla)", value="Tesla").strip()
+if company_name:
+    # -- 1. Find stock ticker using GPT-4 --
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        return {
-            "name": info.get("shortName"),
-            "currentPrice": info.get("currentPrice"),
-            "marketCap": info.get("marketCap"),
-            "peRatio": info.get("trailingPE"),
-            "forwardPE": info.get("forwardPE"),
-            "dividendYield": info.get("dividendYield"),
-            "beta": info.get("beta"),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
-            "longBusinessSummary": info.get("longBusinessSummary"),
-            "logo_url": info.get("logo_url")
-        }
-    except Exception:
-        return {}
-
-def explain_pe_ratio():
-    return ("P/E-talet (Price/Earnings) visar hur mycket investerare är villiga att betala för varje krona av vinst. "
-            "Ett högt P/E kan tyda på höga förväntningar, medan ett lågt P/E kan indikera undervärdering eller problem.")
-
-def openai_analyze(text, system_prompt):
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+        ticker_resp = openai.ChatCompletion.create(
+            model="gpt-4",
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.7,
-            max_tokens=350
+                {"role": "system", "content": "You are a helpful assistant that provides stock ticker symbols."},
+                {"role": "user", "content": f"What is the stock ticker symbol for the company {company_name}?"}
+            ]
         )
-        return response['choices'][0]['message']['content'].strip()
+        ticker_symbol = ticker_resp['choices'][0]['message']['content'].split()[0].upper().strip()
     except Exception as e:
-        return f"AI API fel: {str(e)}"
+        st.error("Error finding ticker: " + str(e))
+        ticker_symbol = None
 
-def indirect_news_keywords(stock_info):
-    keywords = []
-    sector = stock_info.get("sector", "").lower()
-    industry = stock_info.get("industry", "").lower()
-    summary = stock_info.get("longBusinessSummary", "").lower()
+    if ticker_symbol:
+        st.write(f"**Ticker:** {ticker_symbol}")
 
-    if "technology" in sector or "software" in industry:
-        keywords.extend(["molntjänster", "cybersäkerhet", "chips", "semiconductor", "AI", "artificiell intelligens"])
-    if "energy" in sector:
-        keywords.extend(["olja", "gas", "förnybar energi", "vindkraft", "solenergi", "koldioxidutsläpp", "miljöregleringar"])
-    if "automotive" in industry or "car" in summary:
-        keywords.extend(["elektrisk bil", "batteri", "kolfiber", "ståltullar", "leverantörskedja", "halvledarbrist"])
-    if "healthcare" in sector:
-        keywords.extend(["läkemedel", "FDA", "kliniska studier", "vaccin", "medicinsk utrustning"])
-    if not keywords:
-        keywords.extend(["ränta", "inflation", "recession", "konjunktur", "aktiemarknad"])
+        # -- 2. Fetch recent news (direct) --
+        googlenews = GoogleNews(lang='en', period='7d')
+        googlenews.search(company_name)
+        direct_news = googlenews.results()
+        # Extract relevant fields
+        direct_articles = []
+        for item in direct_news:
+            title = item.get("title")
+            media = item.get("media")
+            date = item.get("date")
+            link = item.get("link")
+            direct_articles.append({"title": title, "media": media, "date": date, "link": link})
 
-    return " OR ".join(keywords[:5])
+        # -- 3. Fetch related topics using GPT-4 for indirect news --
+        try:
+            topics_resp = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are an expert in business research."},
+                    {"role": "user", "content": f"Suggest 3-5 related industry topics or supply-chain terms for the company {company_name} (comma-separated)."}
+                ]
+            )
+            topics_list = topics_resp['choices'][0]['message']['content']
+            # Parse comma-separated list
+            related_topics = [t.strip() for t in topics_list.replace(".", "").split(",") if t.strip()]
+        except Exception:
+            related_topics = []
 
-# --- Streamlit app UI ---
+        # -- 4. Fetch news on related topics (indirect) --
+        indirect_articles = []
+        for topic in related_topics:
+            googlenews.search(topic)
+            for item in googlenews.results():
+                indirect_articles.append({
+                    "title": item.get("title"),
+                    "media": item.get("media"),
+                    "date": item.get("date"),
+                    "link": item.get("link")
+                })
+            googlenews.clear()
 
-st.set_page_config(page_title="Aktie & Nyhetsanalys", layout="wide")
+        # -- UI: News Overview --
+        st.header("📰 News Overview")
+        if direct_articles:
+            st.subheader("Direct News (Company-specific)")
+            for art in direct_articles:
+                st.markdown(f"- **{art['date']}** – [{art['title']}]({art['link']}) ({art['media']})")
+        else:
+            st.write("No direct news found.")
 
-st.title("🔎 Aktie- & Nyhetsanalys med GoogleNews och AI")
-st.write("Få nyheter och analyser direkt kopplade och indirekt kopplade till ditt valda företag.")
+        if related_topics:
+            st.subheader("Indirect News (Related Topics)")
+            for art in indirect_articles:
+                st.markdown(f"- **{art['date']}** – [{art['title']}]({art['link']}) ({art['media']})")
+        else:
+            st.write("No indirect topics or news found.")
 
-stock_ticker = st.text_input("Ange aktiens ticker-symbol (ex. TSLA, AAPL):", value="TSLA").upper()
+        # -- 5. Fetch financial metrics with yfinance --
+        try:
+            ticker = Ticker(ticker_symbol)
+            info = ticker.info
+        except Exception as e:
+            st.error("Error fetching financial data: " + str(e))
+            info = {}
 
-if stock_ticker:
-    stock_info = get_stock_data(stock_ticker)
-    if not stock_info:
-        st.error("Kunde inte hämta aktiedata. Kontrollera ticker-symbolen.")
-    else:
-        col1, col2 = st.columns([3,1])
-        with col1:
-            st.header(f"{stock_info.get('name')} ({stock_ticker})")
-            st.markdown(f"**Aktuellt pris:** {stock_info.get('currentPrice', 'N/A')} SEK")
-            st.markdown(f"**Marknadsvärde:** {format_large_number(stock_info.get('marketCap'))}")
-            st.markdown(f"**P/E-tal:** {stock_info.get('peRatio', 'N/A')}")
-            with st.expander("Vad är P/E-tal?"):
-                st.write(explain_pe_ratio())
-            st.markdown(f"**Utdelningsavkastning:** {stock_info.get('dividendYield', 'N/A')}")
-            st.markdown(f"**Beta (volatilitet):** {stock_info.get('beta', 'N/A')}")
-            st.markdown(f"**Sektor:** {stock_info.get('sector', 'N/A')}")
-            st.markdown(f"**Bransch:** {stock_info.get('industry', 'N/A')}")
-            st.markdown("### Kort företagsbeskrivning:")
-            st.write(stock_info.get("longBusinessSummary", "Ingen sammanfattning tillgänglig."))
-            if stock_info.get("logo_url"):
-                st.image(stock_info["logo_url"], width=100)
+        # Extract metrics
+        market_cap = info.get("marketCap")
+        pe_ratio = info.get("trailingPE")
+        eps = info.get("trailingEps")
+        roe = info.get("returnOnEquity")
+        debt = info.get("totalDebt")
 
-        with col2:
-            st.subheader("Senaste nyheter direkt om företaget")
-            direct_news = fetch_google_news(stock_info.get("name", stock_ticker), max_results=5)
-            if direct_news:
-                for article in direct_news:
-                    st.markdown(f"**[{article['title']}]({article['link']})**")
-                    st.write(article.get("desc", ""))
-                    prompt = (f"Analysera kort hur denna nyhet kan påverka aktiekursen för {stock_info.get('name')}:\n\n"
-                              f"{article['title']}: {article.get('desc','')}")
-                    ai_result = openai_analyze(prompt, "Du är en finansanalytiker som ger korta och tydliga analyser.")
-                    st.info(ai_result)
-            else:
-                st.write("Inga direkta nyheter hittades.")
+        # Format large numbers (e.g., market cap in billions)
+        def fmt_number(x):
+            if x is None:
+                return "N/A"
+            for unit in [("T", 1e12), ("B", 1e9), ("M", 1e6), ("k", 1e3)]:
+                if abs(x) >= unit[1]:
+                    return f"{x/unit[1]:.2f}{unit[0]}"
+            return str(x)
 
-            st.subheader("Indirekta nyheter baserat på sektor och bransch")
-            indirect_query = indirect_news_keywords(stock_info)
-            indirect_news = fetch_google_news(indirect_query, max_results=5)
-            if indirect_news:
-                for article in indirect_news:
-                    st.markdown(f"**[{article['title']}]({article['link']})**")
-                    st.write(article.get("desc", ""))
-                    prompt = (f"Analysera kort hur denna indirekta nyhet kan påverka aktiekursen för {stock_info.get('name')}:\n\n"
-                              f"{article['title']}: {article.get('desc','')}")
-                    ai_result = openai_analyze(prompt, "Du är en finansanalytiker som ger korta och tydliga analyser.")
-                    st.info(ai_result)
-            else:
-                st.write("Inga indirekta nyheter hittades.")
+        market_cap_str = fmt_number(market_cap) if market_cap else "N/A"
+        pe_str = f"{pe_ratio:.2f}" if pe_ratio else "N/A"
+        eps_str = f"{eps:.2f}" if eps else "N/A"
+        roe_str = f"{roe*100:.1f}%" if roe else "N/A"
+        debt_str = fmt_number(debt) if debt else "N/A"
 
-            st.subheader("Slutlig investeringsanalys")
-            combined_text = f"{stock_info.get('longBusinessSummary', '')}\nDirekta nyheter: {', '.join([n['title'] for n in direct_news])}\nIndirekta nyheter: {', '.join([n['title'] for n in indirect_news])}"
-            final_prompt = ("Sammanfatta företagets nuvarande läge och ge en bedömning om aktien verkar ha potential baserat på "
-                            "ekonomisk data och nyheter, både direkt och indirekt relaterade.")
-            final_analysis = openai_analyze(combined_text, final_prompt)
-            st.success(final_analysis)
+        # -- UI: Financial Metrics --
+        st.header("💰 Financial Metrics")
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Market Cap", market_cap_str)
+        col2.metric("P/E Ratio", pe_str)
+        col3.metric("EPS (TTM)", eps_str)
+        col4.metric("Return on Equity (ROE)", roe_str)
+        col5.metric("Total Debt", debt_str)
+
+        # Expanders for definitions
+        with st.expander("What is Market Cap?"):
+            st.write("Market capitalization (market cap) is the total value of all a company's outstanding shares. It’s calculated as share price × total shares:contentReference[oaicite:8]{index=8}.")
+        with st.expander("What is P/E Ratio?"):
+            st.write("The Price/Earnings (P/E) ratio equals the stock price divided by earnings per share:contentReference[oaicite:9]{index=9}. A lower P/E can imply a stock is undervalued, while a higher P/E may suggest high growth expectations.")
+        with st.expander("What is EPS?"):
+            st.write("Earnings Per Share (EPS) is the portion of a company’s profit allocated to each outstanding share. It’s net income divided by shares outstanding:contentReference[oaicite:10]{index=10}.")
+        with st.expander("What is ROE?"):
+            st.write("Return on Equity (ROE) measures profitability relative to shareholder equity (net income ÷ equity):contentReference[oaicite:11]{index=11}. A higher ROE means the company is efficient at generating profits from its equity.")
+        with st.expander("What is Total Debt?"):
+            st.write("Total Debt is the sum of a company’s short- and long-term interest-bearing liabilities. High debt levels can affect financial risk and leverage.")
+
+        # -- 6. AI Insights (GPT-4 Analysis) --
+        st.header("🤖 AI Insights")
+        ai_prompt = f"""
+        You are a financial analyst assistant. The company is **{company_name}** ({ticker_symbol}). 
+        Recent direct news headlines:\n""" + "\n".join([f"- {art['title']}" for art in direct_articles[:5]]) + \
+        "\nIndirect news topics: " + ", ".join(related_topics[:5]) + \
+        f"\nFinancial metrics: Market Cap {market_cap_str}, P/E {pe_str}, EPS {eps_str}, ROE {roe_str}, Debt {debt_str}.\n" + \
+        "Based on this information, write an analysis structured with sections for **Risk Factors**, **Upside Potential**, **Macro Events** to watch, and a **Final Verdict** on the investment outlook."
+        try:
+            analysis_resp = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are an expert stock analysis assistant."},
+                    {"role": "user", "content": ai_prompt}
+                ]
+            )
+            analysis_text = analysis_resp['choices'][0]['message']['content']
+        except Exception as e:
+            analysis_text = "Error running AI analysis: " + str(e)
+
+        # Display the AI analysis (which includes risk, upside, macro, verdict)
+        st.markdown(analysis_text)
