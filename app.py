@@ -1,111 +1,119 @@
 import streamlit as st
-import openai
 import yfinance as yf
-from datetime import datetime, timedelta
-import requests
-from bs4 import BeautifulSoup
-from textblob import TextBlob
 import plotly.graph_objects as go
+from textblob import TextBlob
+import requests
+from openai import OpenAI
+import datetime
 
-# API-nycklar
-openai.api_key = 'din-openai-nyckel'
+# --- API-nycklar ---
+OPENAI_API_KEY = "din-openai-nyckel-har"
+NEWS_API_KEY = "din-news-api-nyckel-har"
 
-# Funktion för att hämta aktiedata
-def get_stock_data(ticker):
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+# --- Funktion: Hämta bolagsdata ---
+def get_stock_info(ticker):
     stock = yf.Ticker(ticker)
-    stock_data = stock.history(period="1d", interval="1h")
-    return stock_data
+    info = stock.info
+    return {
+        "longName": info.get("longName", "N/A"),
+        "sector": info.get("sector", "N/A"),
+        "marketCap": info.get("marketCap", 0),
+        "trailingPE": info.get("trailingPE", None),
+        "forwardPE": info.get("forwardPE", None),
+        "priceToBook": info.get("priceToBook", None),
+        "dividendYield": info.get("dividendYield", None),
+        "earningsGrowth": info.get("earningsQuarterlyGrowth", None),
+        "summary": info.get("longBusinessSummary", "")
+    }
 
-# Funktion för att hämta nyheter om ett företag och dess bransch
-def get_related_news(company_name):
-    # Nyckelord som kan vara relaterade till företagets verksamhet
-    keywords = [company_name, f"{company_name} raw materials", f"{company_name} market", "global trade tariffs", "carbon fiber", "steel tariffs"]
-    
-    news_articles = []
-    for keyword in keywords:
-        url = f"https://newsapi.org/v2/everything?q={keyword}&apiKey=din-news-api-nyckel"
-        response = requests.get(url).json()
-        
-        for article in response['articles']:
-            news_articles.append({
-                'title': article['title'],
-                'description': article['description'],
-                'url': article['url'],
-                'published_at': article['publishedAt'],
-            })
-    return news_articles
+# --- Funktion: Hämta relaterade nyheter ---
+def get_related_news(company_name, sector):
+    keywords = [company_name, sector, "supply chain", "trade tariffs", "commodity prices"]
+    all_articles = []
+    for kw in keywords:
+        url = f"https://newsapi.org/v2/everything?q={kw}&apiKey={NEWS_API_KEY}&language=sv"
+        r = requests.get(url)
+        if r.status_code == 200:
+            data = r.json()
+            all_articles.extend(data["articles"])
+    return all_articles[:5]  # Top 5 nyheter
 
-# Funktion för att analysera nyheterna med GPT-3
-def analyze_news_with_gpt(news_articles, company_name):
-    news_text = " ".join([article['title'] + " " + article['description'] for article in news_articles])
-    
-    # Be GPT att analysera hur nyheterna påverkar företaget
-    prompt = f"Given the following news related to {company_name}, analyze how they can affect the company's stock price in the short and long term:\n\n{news_text}"
-    
+# --- Funktion: AI-analys av nyheter ---
+def analyze_news_with_openai(text):
+    prompt = f"Analysera följande nyhet i relation till företagets framtid: {text}. Hur kan detta påverka aktiekursen kortsiktigt och långsiktigt?"
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "Du är en finansanalytiker."},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=400,
+        temperature=0.6
+    )
+    return response.choices[0].message.content
+
+# --- Funktion: Sentimentanalys ---
+def sentiment_score(text):
+    blob = TextBlob(text)
+    return blob.sentiment.polarity
+
+# --- Format för miljardtal ---
+def format_market_cap(val):
+    if val >= 1e9:
+        return f"{val / 1e9:.1f} miljarder"
+    elif val >= 1e6:
+        return f"{val / 1e6:.1f} miljoner"
+    return str(val)
+
+# --- Streamlit UI ---
+st.set_page_config(page_title="AI Aktieanalys", layout="wide")
+st.title("🔍 AI-baserad aktieanalys")
+
+user_input = st.text_input("Sök företagsnamn eller ticker (ex. TSLA för Tesla):")
+
+if user_input:
     try:
-        response = openai.Completion.create(
-            engine="gpt-3.5-turbo",  # För den senaste modellen
-            prompt=prompt,
-            max_tokens=500,
-            temperature=0.7,
-        )
-        analysis = response.choices[0].text.strip()
-        return analysis
+        st.subheader(f"📊 Data för {user_input.upper()}")
+        stock_data = get_stock_info(user_input)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**Bolagsnamn:** {stock_data['longName']}")
+            st.markdown(f"**Sektor:** {stock_data['sector']}")
+            st.markdown(f"**Marknadsvärde:** {format_market_cap(stock_data['marketCap'])}")
+            st.markdown(f"**P/E (trailing):** {stock_data['trailingPE']}")
+            st.markdown(f"**P/E (forward):** {stock_data['forwardPE']}")
+        with col2:
+            with st.expander("ℹ️ Vad betyder nyckeltalen?"):
+                st.markdown("**P/E-tal:** Pris per aktie delat med vinst per aktie. Högt P/E kan innebära hög förväntan på tillväxt.")
+                st.markdown("**Price to Book:** Visar marknadens värdering jämfört med företagets bokförda värde.")
+                st.markdown("**Earnings Growth:** Hur mycket vinsten växt jämfört med tidigare kvartal.")
+
+            st.markdown(f"**Pris / Bokfört värde:** {stock_data['priceToBook']}")
+            st.markdown(f"**Direktavkastning:** {round(stock_data['dividendYield'] * 100, 2) if stock_data['dividendYield'] else 'N/A'}%")
+            st.markdown(f"**Vinsttillväxt (QoQ):** {stock_data['earningsGrowth']}")
+
+        st.subheader("🧾 Företagsbeskrivning")
+        st.markdown(stock_data['summary'])
+
+        st.subheader("📰 Relaterade nyheter och analys")
+        articles = get_related_news(stock_data['longName'], stock_data['sector'])
+
+        for article in articles:
+            st.markdown(f"#### [{article['title']}]({article['url']})")
+            if article['description']:
+                st.markdown(article['description'])
+                sentiment = sentiment_score(article['description'])
+                st.markdown(f"**🧠 AI-analys:** {analyze_news_with_openai(article['description'])}")
+                st.progress((sentiment + 1) / 2)
+
+        st.subheader("📈 Slutanalys")
+        st.markdown("Utifrån tillgänglig finansiell data och relevanta nyheter kan det vara värt att gå igenom bolagets senaste kvartalsrapport för att:")
+        st.markdown("- Bekräfta vinsttillväxt")
+        st.markdown("- Utvärdera risker kopplat till externa händelser (ex. handelsregler, råvarupriser)")
+        st.markdown("- Jämföra värdering (P/E) mot konkurrenter i samma sektor")
+
     except Exception as e:
-        return f"Error in analysis: {e}"
-
-# Funktion för att bedöma aktiens framtida potential baserat på ekonomiska siffror
-def stock_price_potential(stock_data, news_analysis):
-    latest_price = stock_data['Close'][-1]
-    percent_change = (stock_data['Close'][-1] - stock_data['Close'][0]) / stock_data['Close'][0] * 100
-    
-    # Här kan vi också lägga till sentimentanalys på nyheterna
-    sentiment = TextBlob(news_analysis).sentiment.polarity
-    
-    # Visualisera aktiekursens förändring
-    fig = go.Figure(go.Candlestick(x=stock_data.index,
-                                 open=stock_data['Open'],
-                                 high=stock_data['High'],
-                                 low=stock_data['Low'],
-                                 close=stock_data['Close']))
-    fig.update_layout(title=f"{company_name} Stock Price Analysis", xaxis_title="Date", yaxis_title="Price (USD)")
-    
-    # Slutlig bedömning av aktiens framtida potential
-    future_trend = "Positive" if sentiment > 0 else "Negative"
-    
-    return fig, f"Sentiment: {sentiment:.2f}, Short-term price change: {percent_change:.2f}%, Long-term outlook: {future_trend}"
-
-# Använd Streamlit för UI
-st.title("Stock News and Analysis")
-company_name = st.text_input("Enter Company Name:", "Astor")
-stock_ticker = st.text_input("Enter Stock Ticker (e.g., TSLA, AAPL):", "ASTOR")
-
-if st.button("Get Analysis"):
-    st.write("Fetching stock data and news...")
-    
-    # Hämta aktiedata och nyheter
-    stock_data = get_stock_data(stock_ticker)
-    news_articles = get_related_news(company_name)
-    
-    # Analysera nyheterna med GPT-3
-    news_analysis = analyze_news_with_gpt(news_articles, company_name)
-    
-    # Visa aktiekursanalys
-    fig, price_analysis = stock_price_potential(stock_data, news_analysis)
-    
-    st.plotly_chart(fig)
-    st.write(price_analysis)
-    
-    # Visa detaljerad nyhetsanalys
-    st.subheader("News Analysis")
-    st.write(news_analysis)
-    
-    st.subheader("Related News")
-    for article in news_articles:
-        st.write(f"[{article['title']}]({article['url']})")
-        st.write(f"Published on: {article['published_at']}")
-        st.write(f"Description: {article['description']}")
-        st.markdown("---")
-
-
-
+        st.error(f"Något gick fel: {e}")
